@@ -1,0 +1,12 @@
+{
+  "name": "typeboost",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build --no-bundle"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

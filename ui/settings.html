@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>TypeBoost 設定</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #dfe2e8; --text: #1b1e24; --muted: #667080;
+    --accent: #2f6fde; --accent-text: #ffffff; --chip: #eef1f6; --danger: #c93b3b; --ok: #1f8a4c;
+    --field: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --panel: #1e2128; --line: #323743; --text: #eceef2; --muted: #98a1b0;
+      --accent: #6aa5ff; --accent-text: #0e1420; --chip: #2a2e38; --danger: #ff8389; --ok: #6fdc8c;
+      --field: #171a20;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; grid-template-rows: auto auto 1fr auto auto;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.55 "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px 6px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  .status { margin-left: auto; display: flex; gap: 8px; font-size: 12px; }
+  .badge { padding: 2px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .badge.ok { color: var(--ok); } .badge.bad { color: var(--danger); }
+
+  nav { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+  nav button {
+    border: 0; background: none; color: var(--muted); font: inherit; padding: 9px 14px; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+  main { overflow-y: auto; padding: 18px 20px; }
+  section[hidden] { display: none; }
+  h2 { font-size: 14px; margin: 0 0 4px; }
+  .help { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+  .block { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+
+  input[type="text"], textarea, select {
+    width: 100%; font: inherit; color: var(--text); background: var(--field);
+    border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px;
+  }
+  textarea { resize: vertical; min-height: 62px; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 10px 0 4px; }
+  label:first-child { margin-top: 0; }
+
+  button.btn {
+    font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 7px; padding: 6px 12px; cursor: pointer;
+  }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  button.ghost { border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; padding: 4px 8px; border-radius: 6px; }
+  button.ghost:hover { color: var(--danger); background: var(--chip); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chips button {
+    font: inherit; font-size: 12.5px; border: 1px solid var(--line); background: var(--chip); color: var(--text);
+    border-radius: 999px; padding: 3px 11px; cursor: pointer;
+  }
+  .chips button:hover { border-color: var(--accent); }
+
+  .rule { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+  .rule:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .rule-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .rule-head input { max-width: 280px; }
+  .rule-head .ghost { margin-left: auto; }
+  .empty { color: var(--muted); font-size: 13px; padding: 4px 0 10px; }
+
+  .dict-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .dict-tools input { max-width: 260px; }
+  .dict-tools .count { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 0 6px 6px 0; }
+  td { padding: 3px 6px 3px 0; vertical-align: middle; }
+  td.arrow { color: var(--muted); width: 22px; text-align: center; padding-right: 6px; }
+  td.del { width: 36px; padding-right: 0; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  code { font-family: Consolas, monospace; font-size: 12.5px; background: var(--chip); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+
+  #tester { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 20px; }
+  #tester .line { display: grid; grid-template-columns: 1fr 170px auto; gap: 8px; align-items: center; }
+  #result { margin-top: 8px; min-height: 22px; font-size: 14px; white-space: pre-wrap; }
+  #result.error { color: var(--danger); }
+  #result .ms { color: var(--muted); font-size: 12px; margin-left: 8px; }
+
+  footer { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid var(--line); }
+  #saveState { color: var(--muted); font-size: 12.5px; margin-right: auto; }
+  #saveState.error { color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>TypeBoost 設定</h1>
+  <div class="status">
+    <span class="badge" id="keyBadge">APIキー: 確認中</span>
+  </div>
+</header>
+
+<nav role="tablist">
+  <button role="tab" data-tab="tone" aria-selected="true">口調</button>
+  <button role="tab" data-tab="dict" aria-selected="false">辞書</button>
+  <button role="tab" data-tab="general" aria-selected="false">一般</button>
+</nav>
+
+<main>
+  <section id="tab-tone">
+    <div class="block">
+      <h2>既定の口調</h2>
+      <p class="help">清書するときの文体です。下のボタンで定型を入れてから、自由に書き換えられます。</p>
+      <div class="chips" data-presets-for="tone"></div>
+      <textarea id="tone" rows="3"></textarea>
+    </div>
+
+    <div class="block">
+      <h2>アプリ別の口調</h2>
+      <p class="help">入力先のアプリによって口調を切り替えます。該当するアプリがなければ既定の口調を使います。</p>
+      <div id="rules"></div>
+      <button class="btn" id="addRule">＋ アプリを追加</button>
+      <datalist id="apps"></datalist>
+    </div>
+
+    <div class="block">
+      <h2>追加の指示</h2>
+      <p class="help">口調以外で常に守らせたいことを書きます。例:「句点の後に改行しない」「英単語の前後に半角スペースを入れる」</p>
+      <textarea id="extra" rows="3"></textarea>
+    </div>
+  </section>
+
+  <section id="tab-dict" hidden>
+    <div class="block">
+      <h2>辞書</h2>
+      <p class="help">左の読みや略記を打つと、必ず右の表記になります。固有名詞や社内用語の表記固定にも、短い略記の展開にも使えます。例:「たいぷぶーすと → TypeBoost」「おつ → お疲れ様です」</p>
+      <div class="dict-tools">
+        <input type="text" id="dictFilter" placeholder="絞り込み" aria-label="辞書を絞り込む">
+        <button class="btn" id="addWord">＋ 単語を追加</button>
+        <span class="count" id="dictCount"></span>
+      </div>
+      <table>
+        <thead><tr><th>読み・略記</th><th></th><th>表記</th><th></th></tr></thead>
+        <tbody id="dictRows"></tbody>
+      </table>
+      <div class="empty" id="dictEmpty" hidden>まだ単語がありません。</div>
+    </div>
+  </section>
+
+  <section id="tab-general" hidden>
+    <div class="block">
+      <div class="row2">
+        <div>
+          <label for="trigger">清書のキー(2回押し)</label>
+          <select id="trigger">
+            <option value="shift">Shift(左右どちらでも)</option>
+            <option value="lshift">左Shift</option>
+            <option value="rshift">右Shift</option>
+            <option value="ctrl">Ctrl(左右どちらでも)</option>
+            <option value="lctrl">左Ctrl</option>
+            <option value="rctrl">右Ctrl</option>
+            <option value="convert">変換キー(JIS配列)</option>
+          </select>
+        </div>
+        <div>
+          <label for="model">モデル</label>
+          <input type="text" id="model" list="models" spellcheck="false">
+          <datalist id="models">
+            <option value="claude-haiku-5-5">速い(既定)</option>
+            <option value="claude-sonnet-5-5">高品質・やや遅い</option>
+            <option value="claude-opus-5-5">最高品質・遅い</option>
+          </datalist>
+        </div>
+      </div>
+      <label for="workspace">ワークスペースID(キーがワークスペースに紐づいていない場合のみ)</label>
+      <input type="text" id="workspace" spellcheck="false" placeholder="空欄なら環境変数 ANTHROPIC_WORKSPACE_ID を使います">
+    </div>
+    <div class="block">
+      <h2>APIキー</h2>
+      <p class="help" id="keyHelp"></p>
+      <h2 style="margin-top:12px">設定ファイル</h2>
+      <p class="help"><code id="configPath"></code></p>
+    </div>
+  </section>
+</main>
+
+<div id="tester">
+  <div class="line">
+    <input type="text" id="testInput" placeholder="ここにひらがなを打って試す(保存前の設定で清書します)" aria-label="試す文章">
+    <select id="testApp" aria-label="どの口調で試すか"></select>
+    <button class="btn" id="testRun">試す</button>
+  </div>
+  <div id="result" aria-live="polite"></div>
+</div>
+
+<footer>
+  <span id="saveState"></span>
+  <button class="btn primary" id="save" disabled>保存</button>
+</footer>
+
+<script>
+  const { invoke } = window.__TAURI__.core;
+  const $ = (id) => document.getElementById(id);
+
+  const PRESETS = [
+    ['丁寧', 'です・ます調の、簡潔で丁寧なビジネスチャットの文体。文意は変えず、語尾や言い回しだけを整える。'],
+    ['カジュアル', '親しい同僚に話しかけるような、くだけた口調。敬語は使わず、短く自然に。'],
+    ['敬語メール', '社外の相手に送るビジネスメールの敬語。尊敬語と謙譲語を正しく使い、クッション言葉を適度に補う。二重敬語や過剰な「させていただく」は避ける。'],
+    ['変換のみ', '口調は変えない。入力の語尾や言い回しをそのまま保ち、漢字変換と打ち間違いの修正だけを行う。'],
+  ];
+
+  let settings = null;
+  let dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    $('save').disabled = false;
+    $('saveState').className = '';
+    $('saveState').textContent = '未保存の変更があります';
+  }
+
+  function presetChips(container, apply) {
+    container.replaceChildren(...PRESETS.map(([name, text]) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = name; b.title = text;
+      b.addEventListener('click', () => apply(text));
+      return b;
+    }));
+  }
+
+  // ---- tone ----
+  function renderRules() {
+    const box = $('rules');
+    if (settings.appRules.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty'; empty.textContent = 'アプリ別の口調はまだありません。';
+      box.replaceChildren(empty);
+    } else {
+      box.replaceChildren(...settings.appRules.map((rule, i) => {
+        const wrap = document.createElement('div'); wrap.className = 'rule';
+        const head = document.createElement('div'); head.className = 'rule-head';
+        const app = document.createElement('input');
+        app.type = 'text'; app.value = rule.app; app.placeholder = 'アプリの実行ファイル名(例: slack.exe)';
+        app.setAttribute('list', 'apps'); app.setAttribute('aria-label', 'アプリ'); app.spellcheck = false;
+        app.addEventListener('input', () => { rule.app = app.value; markDirty(); renderTestApps(); });
+        const del = document.createElement('button');
+        del.className = 'ghost'; del.type = 'button'; del.textContent = '削除';
+        del.addEventListener('click', () => { settings.appRules.splice(i, 1); markDirty(); renderRules(); });
+        head.append(app, del);
+        const chips = document.createElement('div'); chips.className = 'chips';
+        const tone = document.createElement('textarea');
+        tone.rows = 2; tone.value = rule.tone; tone.setAttribute('aria-label', 'このアプリの口調');
+        tone.addEventListener('input', () => { rule.tone = tone.value; markDirty(); });
+        presetChips(chips, (text) => { tone.value = text; rule.tone = text; markDirty(); });
+        wrap.append(head, chips, tone);
+        return wrap;
+      }));
+    }
+    renderTestApps();
+  }
+
+  function renderTestApps() {
+    const select = $('testApp');
+    const current = select.value;
+    const options = [new Option('既定の口調で', '')];
+    for (const rule of settings.appRules) {
+      if (rule.app.trim()) options.push(new Option(rule.app.trim() + ' の口調で', rule.app.trim()));
+    }
+    select.replaceChildren(...options);
+    if ([...select.options].some((o) => o.value === current)) select.value = current;
+  }
+
+  // ---- dictionary ----
+  function renderDict(focusLast = false) {
+    const filter = $('dictFilter').value.trim().toLowerCase();
+    const rows = [];
+    settings.dictionary.forEach((entry, i) => {
+      if (filter && !(entry.reading + '\n' + entry.word).toLowerCase().includes(filter)) return;
+      const tr = document.createElement('tr');
+      const mk = (field, label) => {
+        const input = document.createElement('input');
+        input.type = 'text'; input.value = entry[field]; input.setAttribute('aria-label', label);
+        input.addEventListener('input', () => { entry[field] = input.value; markDirty(); });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.isComposing && i === settings.dictionary.length - 1) addWord();
+        });
+        const td = document.createElement('td'); td.append(input);
+        return td;
+      };
+      const arrow = document.createElement('td'); arrow.className = 'arrow'; arrow.textContent = '→';
+      const delTd = document.createElement('td'); delTd.className = 'del';
+      const del = document.createElement('button');
+      del.className = 'ghost'; del.type = 'button'; del.textContent = '✕'; del.setAttribute('aria-label', 'この単語を削除');
+      del.addEventListener('click', () => { settings.dictionary.splice(i, 1); markDirty(); renderDict(); });
+      delTd.append(del);
+      tr.append(mk('reading', '読み・略記'), arrow, mk('word', '表記'), delTd);
+      rows.push(tr);
+    });
+    $('dictRows').replaceChildren(...rows);
+    $('dictEmpty').hidden = settings.dictionary.length > 0;
+    $('dictCount').textContent = settings.dictionary.length + ' 語';
+    if (focusLast && rows.length) rows[rows.length - 1].querySelector('input').focus();
+  }
+
+  function addWord() {
+    $('dictFilter').value = '';
+    settings.dictionary.push({ reading: '', word: '' });
+    markDirty();
+    renderDict(true);
+  }
+
+  // ---- load / save ----
+  function collect() {
+    settings.tone = $('tone').value;
+    settings.extraInstructions = $('extra').value;
+    settings.trigger = $('trigger').value;
+    settings.model = $('model').value;
+    settings.workspaceId = $('workspace').value;
+    return settings;
+  }
+
+  async function load() {
+    settings = await invoke('get_settings');
+    $('tone').value = settings.tone;
+    $('extra').value = settings.extraInstructions;
+    $('trigger').value = settings.trigger;
+    $('model').value = settings.model;
+    $('workspace').value = settings.workspaceId;
+    renderRules();
+    renderDict();
+
+    const status = await invoke('get_status');
+    const badge = $('keyBadge');
+    badge.textContent = status.mock ? 'モックで動作中' : status.apiKeySet ? 'APIキー: 設定済み' : 'APIキー: 未設定';
+    badge.className = 'badge ' + (status.mock || status.apiKeySet ? 'ok' : 'bad');
+    $('keyHelp').textContent = status.apiKeySet
+      ? 'APIキーは環境変数 ANTHROPIC_API_KEY から読み込んでいます。設定ファイルには保存しません。'
+      : 'APIキーが見つかりません。環境変数 ANTHROPIC_API_KEY を設定してから、TypeBoost を起動し直してください。';
+    $('configPath').textContent = status.configPath;
+
+    const apps = await invoke('list_apps');
+    $('apps').replaceChildren(...apps.map((a) => new Option(a, a)));
+  }
+
+  async function save() {
+    try {
+      await invoke('save_settings', { settings: collect() });
+      dirty = false;
+      $('save').disabled = true;
+      $('saveState').className = '';
+      $('saveState').textContent = '保存しました。次の清書から反映されます';
+      settings = await invoke('get_settings');
+      renderRules(); renderDict();
+    } catch (e) {
+      $('saveState').className = 'error';
+      $('saveState').textContent = String(e);
+    }
+  }
+
+  async function runTest() {
+    const result = $('result');
+    const input = $('testInput').value;
+    $('testRun').disabled = true;
+    result.className = ''; result.textContent = '清書中…';
+    const started = performance.now();
+    try {
+      const out = await invoke('preview', { settings: collect(), input, app: $('testApp').value || null });
+      const ms = document.createElement('span'); ms.className = 'ms';
+      ms.textContent = (Math.round(performance.now() - started) / 1000).toFixed(2) + '秒';
+      result.replaceChildren(document.createTextNode(out), ms);
+    } catch (e) {
+      result.className = 'error'; result.textContent = String(e);
+    } finally {
+      $('testRun').disabled = false;
+    }
+  }
+
+  // ---- wiring ----
+  document.querySelectorAll('nav button').forEach((tab) => tab.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    for (const name of ['tone', 'dict', 'general']) $('tab-' + name).hidden = name !== tab.dataset.tab;
+  }));
+  presetChips(document.querySelector('[data-presets-for="tone"]'), (text) => { $('tone').value = text; markDirty(); });
+  for (const id of ['tone', 'extra', 'model', 'workspace']) $(id).addEventListener('input', markDirty);
+  $('trigger').addEventListener('change', markDirty);
+  $('addRule').addEventListener('click', () => {
+    settings.appRules.push({ app: '', tone: PRESETS[0][1] });
+    markDirty(); renderRules();
+    $('rules').lastElementChild.querySelector('input').focus();
+  });
+  $('addWord').addEventListener('click', addWord);
+  $('dictFilter').addEventListener('input', () => renderDict());
+  $('save').addEventListener('click', save);
+  $('testRun').addEventListener('click', runTest);
+  $('testInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) runTest(); });
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (dirty) save(); }
+  });
+
+  load();
+</script>
+</body>
+</html>

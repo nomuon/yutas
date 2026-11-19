@@ -1,4 +1,4 @@
-# Drives a real text field with synthetic key presses to test TypeBoost.
+# Drives a real text field with synthetic key presses to test yutas.
 # Every key is sent only while the expected window is in the foreground.
 #   -Keys   romaji to type with the IME on (letters, digits, '-', ',', '.')
 #   -Title  substring the foreground window title must contain

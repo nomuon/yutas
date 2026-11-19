@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TypeBoost",
+  "productName": "yutas",
   "version": "0.0.1",
-  "identifier": "dev.typeboost.spike",
+  "identifier": "dev.yutas.app",
   "build": {
     "frontendDist": "../ui"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "pill",
-        "title": "TypeBoost",
+        "title": "yutas",
         "url": "pill.html",
         "width": 480,
         "height": 88,

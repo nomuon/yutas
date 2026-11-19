@@ -50,7 +50,7 @@ fn trigger(app: &AppHandle) {
         pill::flash(app, "error", "入力を追跡できませんでした", "変換・カーソル移動の後は未対応", 2200);
         return;
     }
-    if keys::ime_open() == Some(false) && std::env::var("TYPEBOOST_SKIP_IME_CHECK").is_err() {
+    if keys::ime_open() == Some(false) && std::env::var("YUTAS_SKIP_IME_CHECK").is_err() {
         log("abort: IME reported off");
         hook::state().reset_composition();
         pill::flash(app, "info", "IMEがオフです", "", 1400);
@@ -160,8 +160,8 @@ fn polish_and_replace(app: &AppHandle, mode: Mode, source: String, saved_clipboa
             log(&format!(
                 "ok: mode={} provider={} model={} tone={} dict={} in={} out={} chars | read={}ms first_text={}ms llm_done={}ms total={}ms",
                 if mode == Mode::Kana { "kana" } else { "selection" },
-                llm::provider(),
-                settings.model,
+                llm::provider(&settings),
+                settings.active_model(),
                 rule_app.as_deref().unwrap_or("default"),
                 settings.dictionary.len(),
                 source.chars().count(),

@@ -1,12 +1,13 @@
-//! User settings, stored as JSON in %APPDATA%\TypeBoost\config.json.
+//! User settings, stored as JSON in %APPDATA%\yutas\config.json.
 //! Read on every operation, so a save takes effect at once. The API key is
-//! deliberately not kept here: it stays in the environment.
+//! deliberately not kept here: see secrets.rs.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MODEL: &str = "claude-haiku-5-5";
+pub const DEFAULT_LOCAL_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_TONE: &str =
     "です・ます調の、簡潔で丁寧なビジネスチャットの文体。文意は変えず、語尾や言い回しだけを整える。";
 
@@ -31,8 +32,13 @@ pub struct AppRule {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub trigger: String,
+    /// "anthropic" (Claude, cloud) or "local" (an OpenAI-compatible server
+    /// on this machine or network, such as Ollama or LM Studio).
+    pub provider: String,
     pub model: String,
     pub workspace_id: String,
+    pub local_url: String,
+    pub local_model: String,
     pub tone: String,
     pub extra_instructions: String,
     pub dictionary: Vec<DictEntry>,
@@ -42,10 +48,13 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            trigger: std::env::var("TYPEBOOST_TRIGGER").unwrap_or_else(|_| "shift".into()),
-            model: std::env::var("TYPEBOOST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
+            trigger: "shift".into(),
+            provider: "anthropic".into(),
+            model: DEFAULT_MODEL.into(),
             workspace_id: String::new(),
-            tone: std::env::var("TYPEBOOST_TONE").unwrap_or_else(|_| DEFAULT_TONE.into()),
+            local_url: DEFAULT_LOCAL_URL.into(),
+            local_model: String::new(),
+            tone: DEFAULT_TONE.into(),
             extra_instructions: String::new(),
             dictionary: Vec::new(),
             app_rules: Vec::new(),
@@ -56,7 +65,7 @@ impl Default for Settings {
 impl Settings {
     pub fn path() -> PathBuf {
         let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        base.join("TypeBoost").join("config.json")
+        base.join("yutas").join("config.json")
     }
 
     pub fn load() -> Settings {
@@ -83,10 +92,18 @@ impl Settings {
 
     /// Trim, drop empty rows, and fall back to defaults for blank essentials.
     fn cleaned(mut self) -> Settings {
+        if self.provider != "local" {
+            self.provider = "anthropic".into();
+        }
         self.model = self.model.trim().to_string();
         if self.model.is_empty() {
             self.model = DEFAULT_MODEL.into();
         }
+        self.local_url = self.local_url.trim().trim_end_matches('/').to_string();
+        if self.local_url.is_empty() {
+            self.local_url = DEFAULT_LOCAL_URL.into();
+        }
+        self.local_model = self.local_model.trim().to_string();
         if self.tone.trim().is_empty() {
             self.tone = DEFAULT_TONE.into();
         }
@@ -101,6 +118,15 @@ impl Settings {
         }
         self.app_rules.retain(|r| !r.app.is_empty() && !r.tone.trim().is_empty());
         self
+    }
+
+    /// The model the active provider will use.
+    pub fn active_model(&self) -> &str {
+        if self.provider == "local" {
+            &self.local_model
+        } else {
+            &self.model
+        }
     }
 
     /// The tone for the given executable, and the rule's app name if one matched.
@@ -133,10 +159,21 @@ mod tests {
 
     #[test]
     fn partial_json_and_empty_rows() {
-        let json = r#"{ "tone": " ", "dictionary": [ {"reading": "mtg", "word": "ミーティング"}, {"reading": "", "word": "x"} ] }"#;
+        let json = r#"{ "tone": " ", "provider": "openai", "localUrl": "http://localhost:1234/v1/",
+            "dictionary": [ {"reading": "mtg", "word": "ミーティング"}, {"reading": "", "word": "x"} ] }"#;
         let settings = serde_json::from_str::<Settings>(json).unwrap().cleaned();
         assert_eq!(settings.tone, DEFAULT_TONE);
         assert_eq!(settings.dictionary.len(), 1);
         assert_eq!(settings.model, DEFAULT_MODEL);
+        assert_eq!(settings.provider, "anthropic");
+        assert_eq!(settings.local_url, "http://localhost:1234/v1");
+    }
+
+    #[test]
+    fn active_model_follows_provider() {
+        let mut settings = Settings { local_model: "gemma3".into(), ..Settings::default() };
+        assert_eq!(settings.active_model(), DEFAULT_MODEL);
+        settings.provider = "local".into();
+        assert_eq!(settings.active_model(), "gemma3");
     }
 }

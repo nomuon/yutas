@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod engine;
 mod hook;
 mod keys;
 mod llm;
 mod pill;
 mod romaji;
+mod secrets;
 mod settings;
 
 use std::io::Write;
@@ -19,27 +21,28 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use settings::Settings;
 
-/// Timings and outcomes go to %LOCALAPPDATA%\TypeBoost\spike.log.
-/// Typed text is only written when TYPEBOOST_DEBUG is set.
+/// Timings and outcomes go to %LOCALAPPDATA%\yutas\yutas.log.
+/// Typed text is only written when YUTAS_DEBUG is set.
 pub fn log(message: &str) {
     let Some(base) = std::env::var_os("LOCALAPPDATA") else { return };
-    let dir = std::path::Path::new(&base).join("TypeBoost");
+    let dir = std::path::Path::new(&base).join("yutas");
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("spike.log")) {
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("yutas.log")) {
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let _ = writeln!(file, "[{secs}] {message}");
     }
 }
 
 pub fn debug() -> bool {
-    std::env::var("TYPEBOOST_DEBUG").is_ok()
+    std::env::var("YUTAS_DEBUG").is_ok()
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Status {
-    api_key_set: bool,
-    workspace_env_set: bool,
+    /// "stored" (credential manager), "env" or "none"
+    key_source: &'static str,
+    autostart: bool,
     config_path: String,
     mock: bool,
 }
@@ -59,16 +62,36 @@ fn save_settings(settings: Settings) -> Result<(), String> {
 #[tauri::command]
 fn get_status() -> Status {
     Status {
-        api_key_set: llm::api_key().is_some(),
-        workspace_env_set: std::env::var("ANTHROPIC_WORKSPACE_ID").is_ok_and(|w| !w.trim().is_empty()),
+        key_source: secrets::source(),
+        autostart: autostart::is_enabled(),
         config_path: Settings::path().display().to_string(),
-        mock: llm::provider() == "mock",
+        mock: std::env::var("YUTAS_PROVIDER").is_ok_and(|v| v.trim() == "mock"),
     }
+}
+
+#[tauri::command]
+fn set_api_key(key: String) -> Result<(), String> {
+    secrets::store(&key)
+}
+
+#[tauri::command]
+fn delete_api_key() -> Result<(), String> {
+    secrets::delete()
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    autostart::set(enabled)
 }
 
 #[tauri::command]
 fn list_apps() -> Vec<String> {
     keys::visible_apps()
+}
+
+#[tauri::command(async)]
+fn list_local_models(url: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::block_on(llm::local_models(&url))
 }
 
 /// Try the given (possibly unsaved) settings on a sample, without touching any document.
@@ -84,15 +107,20 @@ fn preview(settings: Settings, input: String, app: Option<String>) -> Result<Str
     tauri::async_runtime::block_on(llm::polish(&settings, &tone, mode, input, &mut |_| {}, &|| false))
 }
 
-fn open_settings(app: &AppHandle) {
+/// `tab` opens the window on that tab: "tone", "dict" or "general".
+fn open_settings(app: &AppHandle, tab: Option<&str>) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.unminimize();
         let _ = window.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("TypeBoost 設定")
-        .inner_size(860.0, 700.0)
+    let page = match tab {
+        Some(tab) if matches!(tab, "tone" | "dict" | "general") => format!("settings.html#{tab}"),
+        _ => "settings.html".to_string(),
+    };
+    let built = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(page.into()))
+        .title("yutas 設定")
+        .inner_size(860.0, 720.0)
         .min_inner_size(640.0, 480.0)
         .build();
     if let Err(e) = built {
@@ -104,7 +132,7 @@ fn open_settings(app: &AppHandle) {
 fn already_running() -> bool {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = "Local\\TypeBoost.SingleInstance\0".encode_utf16().collect();
+    let name: Vec<u16> = "Local\\yutas.SingleInstance\0".encode_utf16().collect();
     unsafe {
         let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         !handle.is_null() && GetLastError() == ERROR_ALREADY_EXISTS
@@ -115,22 +143,33 @@ fn main() {
     if already_running() {
         return;
     }
-    let show_settings = std::env::args().any(|a| a == "--settings");
+    // --settings opens the settings window at startup; --settings=general picks a tab.
+    let settings_arg = std::env::args().find(|a| a == "--settings" || a.starts_with("--settings="));
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_settings, save_settings, get_status, list_apps, preview])
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            save_settings,
+            get_status,
+            set_api_key,
+            delete_api_key,
+            set_autostart,
+            list_apps,
+            list_local_models,
+            preview
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             pill::init(&handle);
 
             let open = MenuItem::with_id(app, "settings", "設定…", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "TypeBoost を終了", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "yutas を終了", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("TypeBoost")
+                .tooltip("yutas")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "settings" => open_settings(app),
+                    "settings" => open_settings(app, None),
                     "quit" => app.exit(0),
                     _ => {}
                 });
@@ -141,9 +180,10 @@ fn main() {
 
             let settings = Settings::load();
             log(&format!(
-                "started: provider={} model={} dict={} app_rules={}",
-                llm::provider(),
-                settings.model,
+                "started: provider={} model={} key={} dict={} app_rules={}",
+                llm::provider(&settings),
+                settings.active_model(),
+                secrets::source(),
                 settings.dictionary.len(),
                 settings.app_rules.len()
             ));
@@ -158,11 +198,11 @@ fn main() {
                 }
             });
 
-            if show_settings {
-                open_settings(&handle);
+            if let Some(arg) = &settings_arg {
+                open_settings(&handle, arg.strip_prefix("--settings="));
             }
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to run TypeBoost");
+        .expect("failed to run yutas");
 }

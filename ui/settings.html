@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>TypeBoost 設定</title>
+<title>yutas 設定</title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --line: #dfe2e8; --text: #1b1e24; --muted: #667080;
@@ -86,6 +86,18 @@
   td.del { width: 36px; padding-right: 0; }
 
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .inline { display: flex; gap: 8px; }
+  .inline input { flex: 1; min-width: 0; }
+  .inline .btn { white-space: nowrap; }
+  .seg { display: flex; gap: 18px; margin-bottom: 12px; }
+  .seg label, label.check { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text); font-size: 14px; cursor: pointer; }
+  label.check { padding: 7px 0; }
+  .help.error { color: var(--danger); }
+  .help.ok { color: var(--ok); }
+  input[type="password"] {
+    width: 100%; font: inherit; color: var(--text); background: var(--field);
+    border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px;
+  }
   code { font-family: Consolas, monospace; font-size: 12.5px; background: var(--chip); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
 
   #tester { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 20px; }
@@ -101,9 +113,9 @@
 </head>
 <body>
 <header>
-  <h1>TypeBoost 設定</h1>
+  <h1>yutas 設定</h1>
   <div class="status">
-    <span class="badge" id="keyBadge">APIキー: 確認中</span>
+    <span class="badge" id="keyBadge">確認中</span>
   </div>
 </header>
 
@@ -156,6 +168,53 @@
 
   <section id="tab-general" hidden>
     <div class="block">
+      <h2>清書に使うAI</h2>
+      <p class="help">Claude は速くて高精度ですが、入力した文章を Anthropic に送ります。ローカルLLM はこの PC の中だけで処理します。</p>
+      <div class="seg" role="radiogroup" aria-label="清書に使うAI">
+        <label><input type="radio" name="provider" value="anthropic"> Claude(クラウド)</label>
+        <label><input type="radio" name="provider" value="local"> ローカルLLM</label>
+      </div>
+
+      <div id="panel-anthropic">
+        <label for="apiKey">APIキー</label>
+        <div class="inline">
+          <input type="password" id="apiKey" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+          <button class="btn" id="keySave">キーを保存</button>
+          <button class="btn" id="keyDelete">削除</button>
+        </div>
+        <p class="help" id="keyHelp"></p>
+        <div class="row2">
+          <div>
+            <label for="model">モデル</label>
+            <input type="text" id="model" list="models" spellcheck="false">
+            <datalist id="models">
+              <option value="claude-haiku-5-5">速い(既定)</option>
+              <option value="claude-sonnet-5-5">高品質・やや遅い</option>
+              <option value="claude-opus-5-5">最高品質・遅い</option>
+            </datalist>
+          </div>
+          <div>
+            <label for="workspace">ワークスペースID(必要な場合のみ)</label>
+            <input type="text" id="workspace" spellcheck="false" placeholder="キーがワークスペースに紐づいていないとき">
+          </div>
+        </div>
+      </div>
+
+      <div id="panel-local" hidden>
+        <label for="localUrl">エンドポイントURL(OpenAI互換)</label>
+        <input type="text" id="localUrl" spellcheck="false" placeholder="http://localhost:11434/v1">
+        <label for="localModel">モデル名</label>
+        <div class="inline">
+          <input type="text" id="localModel" list="localModels" spellcheck="false" placeholder="例: gemma3:4b">
+          <button class="btn" id="fetchModels">モデル一覧を取得</button>
+        </div>
+        <datalist id="localModels"></datalist>
+        <p class="help" id="localHelp">Ollama(既定のURL)、LM Studio(http://localhost:1234/v1)、llama.cpp などの OpenAI 互換サーバーに接続します。サーバーは別途起動しておいてください。</p>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>動作</h2>
       <div class="row2">
         <div>
           <label for="trigger">清書のキー(2回押し)</label>
@@ -170,22 +229,15 @@
           </select>
         </div>
         <div>
-          <label for="model">モデル</label>
-          <input type="text" id="model" list="models" spellcheck="false">
-          <datalist id="models">
-            <option value="claude-haiku-5-5">速い(既定)</option>
-            <option value="claude-sonnet-5-5">高品質・やや遅い</option>
-            <option value="claude-opus-5-5">最高品質・遅い</option>
-          </datalist>
+          <label>スタートアップ</label>
+          <label class="check"><input type="checkbox" id="autostart"> PC の起動時に yutas を起動する</label>
+          <p class="help" id="autostartHelp"></p>
         </div>
       </div>
-      <label for="workspace">ワークスペースID(キーがワークスペースに紐づいていない場合のみ)</label>
-      <input type="text" id="workspace" spellcheck="false" placeholder="空欄なら環境変数 ANTHROPIC_WORKSPACE_ID を使います">
     </div>
+
     <div class="block">
-      <h2>APIキー</h2>
-      <p class="help" id="keyHelp"></p>
-      <h2 style="margin-top:12px">設定ファイル</h2>
+      <h2>設定ファイル</h2>
       <p class="help"><code id="configPath"></code></p>
     </div>
   </section>
@@ -321,9 +373,100 @@
     settings.tone = $('tone').value;
     settings.extraInstructions = $('extra').value;
     settings.trigger = $('trigger').value;
+    settings.provider = currentProvider();
     settings.model = $('model').value;
     settings.workspaceId = $('workspace').value;
+    settings.localUrl = $('localUrl').value;
+    settings.localModel = $('localModel').value;
     return settings;
+  }
+
+  // ---- provider, API key, autostart ----
+  let status = null;
+
+  function currentProvider() {
+    return document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
+  }
+
+  function note(id, text, kind = '') {
+    $(id).className = 'help ' + kind;
+    $(id).textContent = text;
+  }
+
+  const KEY_NOTES = {
+    stored: 'APIキーは Windows の資格情報マネージャーに保存されています。設定ファイルには書きません。',
+    env: 'いまは環境変数 ANTHROPIC_API_KEY のキーを使っています。ここで保存すると、保存したキーが優先されます。',
+    none: 'APIキーが未設定です。入力して「キーを保存」を押してください。Windows の資格情報マネージャーに保存されます。',
+  };
+
+  function renderStatus() {
+    const local = currentProvider() === 'local';
+    $('panel-anthropic').hidden = local;
+    $('panel-local').hidden = !local;
+    if (!status) return;
+    const badge = $('keyBadge');
+    const keyed = status.keySource !== 'none';
+    badge.textContent = status.mock ? 'モックで動作中'
+      : local ? 'ローカルLLM'
+      : status.keySource === 'stored' ? 'Claude・APIキー保存済み'
+      : status.keySource === 'env' ? 'Claude・APIキーは環境変数'
+      : 'Claude・APIキー未設定';
+    badge.className = 'badge ' + (status.mock || local || keyed ? 'ok' : 'bad');
+    $('keyDelete').disabled = status.keySource !== 'stored';
+    $('autostart').checked = status.autostart;
+    $('configPath').textContent = status.configPath;
+  }
+
+  async function refreshStatus(keyNote = true) {
+    status = await invoke('get_status');
+    renderStatus();
+    if (keyNote) note('keyHelp', KEY_NOTES[status.keySource]);
+  }
+
+  async function saveKey() {
+    try {
+      await invoke('set_api_key', { key: $('apiKey').value });
+      $('apiKey').value = '';
+      await refreshStatus(false);
+      note('keyHelp', 'APIキーを保存しました。次の清書から使われます。', 'ok');
+    } catch (e) { note('keyHelp', String(e), 'error'); }
+  }
+
+  async function deleteKey() {
+    try {
+      await invoke('delete_api_key');
+      await refreshStatus(false);
+      note('keyHelp', '保存していたAPIキーを削除しました。' + (status.keySource === 'env' ? '環境変数のキーを使います。' : ''), 'ok');
+    } catch (e) { note('keyHelp', String(e), 'error'); }
+  }
+
+  async function toggleAutostart() {
+    const wanted = $('autostart').checked;
+    try {
+      await invoke('set_autostart', { enabled: wanted });
+      note('autostartHelp', wanted ? '次回のサインインから自動で起動します。' : '自動起動を解除しました。', 'ok');
+    } catch (e) {
+      note('autostartHelp', String(e), 'error');
+    }
+    await refreshStatus(false);
+  }
+
+  async function fetchModels() {
+    $('fetchModels').disabled = true;
+    try {
+      const names = await invoke('list_local_models', { url: $('localUrl').value || 'http://localhost:11434/v1' });
+      $('localModels').replaceChildren(...names.map((n) => new Option(n, n)));
+      if (names.length === 0) {
+        note('localHelp', '接続できましたが、モデルがありません。先にモデルを入れてください(例: ollama pull gemma3:4b)。', 'error');
+      } else {
+        if (!$('localModel').value) { $('localModel').value = names[0]; markDirty(); }
+        note('localHelp', names.length + ' 個のモデルが見つかりました: ' + names.join('、'), 'ok');
+      }
+    } catch (e) {
+      note('localHelp', String(e), 'error');
+    } finally {
+      $('fetchModels').disabled = false;
+    }
   }
 
   async function load() {
@@ -333,17 +476,12 @@
     $('trigger').value = settings.trigger;
     $('model').value = settings.model;
     $('workspace').value = settings.workspaceId;
+    $('localUrl').value = settings.localUrl;
+    $('localModel').value = settings.localModel;
+    document.querySelector(`input[name="provider"][value="${settings.provider === 'local' ? 'local' : 'anthropic'}"]`).checked = true;
     renderRules();
     renderDict();
-
-    const status = await invoke('get_status');
-    const badge = $('keyBadge');
-    badge.textContent = status.mock ? 'モックで動作中' : status.apiKeySet ? 'APIキー: 設定済み' : 'APIキー: 未設定';
-    badge.className = 'badge ' + (status.mock || status.apiKeySet ? 'ok' : 'bad');
-    $('keyHelp').textContent = status.apiKeySet
-      ? 'APIキーは環境変数 ANTHROPIC_API_KEY から読み込んでいます。設定ファイルには保存しません。'
-      : 'APIキーが見つかりません。環境変数 ANTHROPIC_API_KEY を設定してから、TypeBoost を起動し直してください。';
-    $('configPath').textContent = status.configPath;
+    await refreshStatus();
 
     const apps = await invoke('list_apps');
     $('apps').replaceChildren(...apps.map((a) => new Option(a, a)));
@@ -387,9 +525,16 @@
     document.querySelectorAll('nav button').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
     for (const name of ['tone', 'dict', 'general']) $('tab-' + name).hidden = name !== tab.dataset.tab;
   }));
+  document.querySelector(`nav button[data-tab="${location.hash.slice(1)}"]`)?.click();
   presetChips(document.querySelector('[data-presets-for="tone"]'), (text) => { $('tone').value = text; markDirty(); });
-  for (const id of ['tone', 'extra', 'model', 'workspace']) $(id).addEventListener('input', markDirty);
+  for (const id of ['tone', 'extra', 'model', 'workspace', 'localUrl', 'localModel']) $(id).addEventListener('input', markDirty);
   $('trigger').addEventListener('change', markDirty);
+  document.querySelectorAll('input[name="provider"]').forEach((radio) => radio.addEventListener('change', () => { markDirty(); renderStatus(); }));
+  $('keySave').addEventListener('click', saveKey);
+  $('apiKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKey(); });
+  $('keyDelete').addEventListener('click', deleteKey);
+  $('autostart').addEventListener('change', toggleAutostart);
+  $('fetchModels').addEventListener('click', fetchModels);
   $('addRule').addEventListener('click', () => {
     settings.appRules.push({ app: '', tone: PRESETS[0][1] });
     markDirty(); renderRules();

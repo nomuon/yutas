@@ -180,7 +180,7 @@ pub fn visible_apps() -> Vec<String> {
     unsafe {
         EnumWindows(Some(each), &mut found as *mut Vec<String> as LPARAM);
     }
-    found.retain(|exe| exe != "typeboost.exe");
+    found.retain(|exe| exe != "yutas.exe");
     found.sort();
     found.dedup();
     found

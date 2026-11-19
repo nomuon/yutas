@@ -1,21 +1,37 @@
-//! Turns raw kana (or a selection) into finished text. Providers: Anthropic
-//! (raw HTTP, the Rust ecosystem has no official SDK) and a mock for testing
-//! the mechanics (TYPEBOOST_PROVIDER=mock).
+//! Turns raw kana (or a selection) into finished text.
+//!
+//! Providers:
+//!   anthropic  Claude over the Messages API (raw HTTP: Rust has no official SDK)
+//!   local      any OpenAI-compatible chat endpoint on this machine or network
+//!              (Ollama, LM Studio, llama.cpp): nothing leaves the machine
+//!   mock       for testing the mechanics (YUTAS_PROVIDER=mock)
 
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::secrets;
 use crate::settings::Settings;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2026-10-21";
 
-static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+static CLOUD: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))
+        .build()
+        .expect("http client")
+});
+
+/// Local models can be slow to load and to answer; and a system proxy must
+/// not get between us and localhost.
+static LOCAL: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(120))
+        .no_proxy()
         .build()
         .expect("http client")
 });
@@ -28,15 +44,11 @@ pub enum Mode {
     Selection,
 }
 
-pub fn provider() -> String {
-    std::env::var("TYPEBOOST_PROVIDER")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "anthropic".into())
-}
-
-pub fn api_key() -> Option<String> {
-    std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.trim().is_empty())
+pub fn provider(settings: &Settings) -> String {
+    match std::env::var("YUTAS_PROVIDER") {
+        Ok(v) if v.trim() == "mock" => "mock".into(),
+        _ => settings.provider.clone(),
+    }
 }
 
 fn workspace_id(settings: &Settings) -> Option<String> {
@@ -111,10 +123,10 @@ pub async fn polish(
     on_text: &mut dyn FnMut(&str),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String, String> {
-    let out = match provider().as_str() {
+    let out = match provider(settings).as_str() {
         "mock" => mock(input, on_text),
-        "anthropic" => anthropic(settings, tone, mode, input, on_text, cancelled).await?,
-        other => return Err(format!("未対応のプロバイダです: {other}")),
+        "local" => local(settings, tone, mode, input, on_text, cancelled).await?,
+        _ => anthropic(settings, tone, mode, input, on_text, cancelled).await?,
     };
     let out = match mode {
         Mode::Kana => out.replace(['\r', '\n'], " ").trim().to_string(),
@@ -138,6 +150,78 @@ fn mock(input: &str, on_text: &mut dyn FnMut(&str)) -> String {
     full
 }
 
+fn max_tokens(mode: Mode) -> u32 {
+    if mode == Mode::Selection {
+        4096
+    } else {
+        1024
+    }
+}
+
+/// Feed each `data:` payload of a server-sent event stream to `on_data`,
+/// until the stream ends or `on_data` returns Ok(true).
+async fn read_sse(
+    resp: &mut reqwest::Response,
+    cancelled: &dyn Fn() -> bool,
+    on_data: &mut dyn FnMut(&str) -> Result<bool, String>,
+) -> Result<(), String> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("通信エラー: {e}"))? {
+        if cancelled() {
+            return Err("キャンセルしました".into());
+        }
+        buf.extend_from_slice(&chunk);
+        while let Some(end) = buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line);
+            if let Some(data) = line.trim().strip_prefix("data:") {
+                if on_data(data.trim())? {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn error_detail(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            v["error"]["message"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.trim().to_string())
+}
+
+// ---- Claude ----
+
+/// Apply one Messages API stream event.
+fn anthropic_event(data: &str, out: &mut String, stop_reason: &mut String) -> Result<bool, String> {
+    let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(false) };
+    match v["type"].as_str() {
+        Some("content_block_delta") => {
+            if let Some(t) = v["delta"]["text"].as_str() {
+                out.push_str(t);
+                return Ok(true);
+            }
+        }
+        Some("message_delta") => {
+            if let Some(r) = v["delta"]["stop_reason"].as_str() {
+                *stop_reason = r.to_string();
+            }
+        }
+        Some("error") => {
+            let m = v["error"]["message"].as_str().unwrap_or("不明なエラー");
+            return Err(format!("APIエラー: {m}"));
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
 async fn anthropic(
     settings: &Settings,
     tone: &str,
@@ -146,11 +230,11 @@ async fn anthropic(
     on_text: &mut dyn FnMut(&str),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String, String> {
-    let key = api_key().ok_or("APIキーが未設定です (ANTHROPIC_API_KEY)")?;
+    let key = secrets::api_key().ok_or("APIキーが未設定です（設定画面で入力）")?;
 
     let mut body = json!({
         "model": settings.model,
-        "max_tokens": if mode == Mode::Selection { 4096 } else { 1024 },
+        "max_tokens": max_tokens(mode),
         "stream": true,
         "system": system_prompt(settings, tone, mode),
         "messages": [{ "role": "user", "content": format!("<input>{input}</input>") }],
@@ -163,7 +247,7 @@ async fn anthropic(
         body["output_config"] = json!({ "effort": "low" });
     }
 
-    let mut request = CLIENT
+    let mut request = CLOUD
         .post(API_URL)
         .header("x-api-key", key)
         .header("anthropic-version", API_VERSION);
@@ -183,11 +267,7 @@ async fn anthropic(
 
     let status = resp.status();
     if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<Value>(&text)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-            .unwrap_or(text);
+        let detail = error_detail(&resp.text().await.unwrap_or_default());
         return Err(match status.as_u16() {
             401 => "APIキーが無効です".to_string(),
             429 => "レート制限中です。少し待ってください".to_string(),
@@ -197,41 +277,15 @@ async fn anthropic(
         });
     }
 
-    let mut buf: Vec<u8> = Vec::new();
     let mut out = String::new();
     let mut stop_reason = String::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("通信エラー: {e}"))? {
-        if cancelled() {
-            return Err("キャンセルしました".into());
+    read_sse(&mut resp, cancelled, &mut |data| {
+        if anthropic_event(data, &mut out, &mut stop_reason)? {
+            on_text(&out);
         }
-        buf.extend_from_slice(&chunk);
-        while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
-            let event: Vec<u8> = buf.drain(..end + 2).collect();
-            let event = String::from_utf8_lossy(&event);
-            for line in event.lines() {
-                let Some(data) = line.strip_prefix("data:") else { continue };
-                let Ok(v) = serde_json::from_str::<Value>(data.trim()) else { continue };
-                match v["type"].as_str() {
-                    Some("content_block_delta") => {
-                        if let Some(t) = v["delta"]["text"].as_str() {
-                            out.push_str(t);
-                            on_text(&out);
-                        }
-                    }
-                    Some("message_delta") => {
-                        if let Some(r) = v["delta"]["stop_reason"].as_str() {
-                            stop_reason = r.to_string();
-                        }
-                    }
-                    Some("error") => {
-                        let m = v["error"]["message"].as_str().unwrap_or("不明なエラー");
-                        return Err(format!("APIエラー: {m}"));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+        Ok(false)
+    })
+    .await?;
 
     match stop_reason.as_str() {
         "end_turn" | "stop_sequence" => Ok(out),
@@ -239,6 +293,126 @@ async fn anthropic(
         "max_tokens" => Err("出力が長すぎて途中で切れました".into()),
         other => Err(format!("応答が完了しませんでした ({other})")),
     }
+}
+
+// ---- local LLM (OpenAI-compatible chat completions) ----
+
+/// Reasoning models print their thinking inside <think> tags; drop it.
+fn strip_think(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<think>") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("</think>") {
+            Some(end) => rest = &rest[start + end + "</think>".len()..],
+            None => return out.trim().to_string(), // still thinking
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+/// Apply one chat-completions stream chunk. Ok(true) means the stream is done.
+fn local_event(data: &str, raw: &mut String, finish: &mut String) -> Result<bool, String> {
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+    let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(false) };
+    if !v["error"].is_null() {
+        return Err(format!("ローカルLLMのエラー: {}", error_detail(data)));
+    }
+    let choice = &v["choices"][0];
+    if let Some(t) = choice["delta"]["content"].as_str() {
+        raw.push_str(t);
+    }
+    if let Some(f) = choice["finish_reason"].as_str() {
+        *finish = f.to_string();
+    }
+    Ok(false)
+}
+
+async fn local(
+    settings: &Settings,
+    tone: &str,
+    mode: Mode,
+    input: &str,
+    on_text: &mut dyn FnMut(&str),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    if settings.local_model.is_empty() {
+        return Err("ローカルLLMのモデル名が未設定です（設定画面で入力）".into());
+    }
+    let url = format!("{}/chat/completions", settings.local_url.trim_end_matches('/'));
+    let body = json!({
+        "model": settings.local_model,
+        "stream": true,
+        "temperature": 0.2,
+        // Reasoning models spend this budget on thinking before they answer,
+        // so it has to be far larger than the answer itself.
+        "max_tokens": 4096,
+        "messages": [
+            { "role": "system", "content": system_prompt(settings, tone, mode) },
+            { "role": "user", "content": format!("<input>{input}</input>") },
+        ],
+    });
+    let mut resp = LOCAL.post(&url).json(&body).send().await.map_err(|e| {
+        if e.is_timeout() {
+            "ローカルLLMの応答がタイムアウトしました".to_string()
+        } else if e.is_connect() {
+            format!("ローカルLLMに接続できません: {}", settings.local_url)
+        } else {
+            format!("通信エラー: {e}")
+        }
+    })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let detail = error_detail(&resp.text().await.unwrap_or_default());
+        return Err(format!("ローカルLLMのエラー {}: {detail}", status.as_u16()));
+    }
+
+    let mut raw = String::new();
+    let mut finish = String::new();
+    read_sse(&mut resp, cancelled, &mut |data| {
+        let done = local_event(data, &mut raw, &mut finish)?;
+        let visible = strip_think(&raw);
+        if !visible.is_empty() {
+            on_text(&visible);
+        }
+        Ok(done)
+    })
+    .await?;
+
+    let out = strip_think(&raw);
+    if finish == "length" {
+        return Err(if out.is_empty() {
+            "モデルが考えるだけで上限に達しました。思考しないモデルを選んでください".to_string()
+        } else {
+            "出力が長すぎて途中で切れました".to_string()
+        });
+    }
+    Ok(out)
+}
+
+/// Model names the local server offers.
+pub async fn local_models(base_url: &str) -> Result<Vec<String>, String> {
+    let url = format!("{}/models", base_url.trim().trim_end_matches('/'));
+    let resp = LOCAL
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| format!("ローカルLLMに接続できません: {}", base_url.trim()))?;
+    if !resp.status().is_success() {
+        return Err(format!("モデル一覧を取得できません (HTTP {})", resp.status().as_u16()));
+    }
+    let v: Value = resp.json().await.map_err(|e| format!("モデル一覧を読み取れません: {e}"))?;
+    let mut names: Vec<String> = v["data"]
+        .as_array()
+        .map(|items| items.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    names.sort();
+    Ok(names)
 }
 
 #[cfg(test)]
@@ -261,5 +435,66 @@ mod tests {
         let plain = system_prompt(&Settings::default(), "x", Mode::Selection);
         assert!(!plain.contains("ユーザー辞書"));
         assert!(!plain.contains("追加の指示"));
+    }
+
+    #[test]
+    fn anthropic_stream_events() {
+        let (mut out, mut stop) = (String::new(), String::new());
+        let delta = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"明日"}}"#;
+        assert_eq!(anthropic_event(delta, &mut out, &mut stop), Ok(true));
+        let end = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#;
+        assert_eq!(anthropic_event(end, &mut out, &mut stop), Ok(false));
+        assert_eq!((out.as_str(), stop.as_str()), ("明日", "end_turn"));
+        let err = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        assert!(anthropic_event(err, &mut out, &mut stop).is_err());
+    }
+
+    #[test]
+    fn local_stream_events() {
+        let (mut raw, mut finish) = (String::new(), String::new());
+        for chunk in [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"明日の"}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"会議"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ] {
+            assert_eq!(local_event(chunk, &mut raw, &mut finish), Ok(false));
+        }
+        assert_eq!(local_event("[DONE]", &mut raw, &mut finish), Ok(true));
+        assert_eq!((raw.as_str(), finish.as_str()), ("明日の会議", "stop"));
+        assert!(local_event(r#"{"error":{"message":"model not found"}}"#, &mut raw, &mut finish).is_err());
+    }
+
+    /// Needs a running local server and YUTAS_TEST_LOCAL_MODEL, so it only
+    /// runs on request: cargo test -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn local_server_round_trip() {
+        let model = std::env::var("YUTAS_TEST_LOCAL_MODEL").expect("set YUTAS_TEST_LOCAL_MODEL");
+        let settings = Settings { provider: "local".into(), local_model: model.clone(), ..Settings::default() };
+        let names = tauri::async_runtime::block_on(local_models(&settings.local_url)).unwrap();
+        assert!(names.contains(&model), "{model} not in {names:?}");
+
+        let started = std::time::Instant::now();
+        let mut first: Option<Duration> = None;
+        let out = tauri::async_runtime::block_on(polish(
+            &settings,
+            crate::settings::DEFAULT_TONE,
+            Mode::Kana,
+            "あしたのかいぎは15じからです",
+            &mut |_| {
+                first.get_or_insert_with(|| started.elapsed());
+            },
+            &|| false,
+        ))
+        .unwrap();
+        println!("local result: {out:?} first_text={first:?} total={:?}", started.elapsed());
+        assert!(!out.contains("<think>"));
+    }
+
+    #[test]
+    fn think_tags_are_dropped() {
+        assert_eq!(strip_think("<think>かんがえちゅう</think>\n明日の会議"), "明日の会議");
+        assert_eq!(strip_think("<think>まだ途中"), "");
+        assert_eq!(strip_think("明日の会議"), "明日の会議");
     }
 }
